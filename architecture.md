@@ -1,163 +1,255 @@
-# Mental Wellness Practice Suggester -- Architecture
+# 🧠 Interview Prep Suggester — Architecture
 
-## How It Works
+## 📌 Overview
 
-```
-User types how they feel
-        |
-        v
-  [understand_mood] -- acknowledges feeling, classifies severity
-        |
-        +---> [suggest_breathing]   \
-        |                            |
-        +---> [suggest_mindfulness]  +--> run in PARALLEL
-        |                            |
-        +---> [suggest_movement]    /
-        |
-        v
-  [pick_best_practice] -- reads all 3, decides quick vs deep
-        |
-        +-- MILD/MODERATE --> [quick_practice] --> under 5 min routine
-        |
-        +-- HIGH ----------> [deep_practice]  --> 10-15 min session
-        |
-        v
-  Final output printed to user
-```
+This project is a **LangGraph-based AI workflow** that generates a personalized interview preparation plan based on a user’s input.
 
-## Interactive Mode
+The system:
+
+* Understands user context (role + preparedness)
+* Runs **3 expert suggestion engines in parallel**
+* Uses a **decision node** to choose prep depth
+* Outputs a **Quick (1-hour)** or **Deep (3-hour)** plan
+
+---
+
+## 🏗️ High-Level Architecture
 
 ```
-$ python mental_wellness_graph.py
-
-  =======================================================
-    MENTAL WELLNESS PRACTICE SUGGESTER
-  =======================================================
-
-    Tell me how you're feeling and I'll suggest a
-    personalized wellness practice just for you.
-    Type 'quit' to exit.
-
-    How are you feeling? > I feel anxious and can't focus
-    ...graph runs...
-    YOUR PERSONALIZED PRACTICE
-    ...
-
-    How are you feeling? > quit
-    Take care of yourself. Goodbye!
+            START
+              |
+      understand_context
+              |
+    -------------------------
+    |          |           |
+suggest_technical  suggest_behavioral  suggest_confidence
+    |          |           |
+    -----------|-----------
+              |
+      pick_prep_strategy
+              |
+        (conditional)
+         /        \
+     quick       deep
+      |            |
+ quick_prep   deep_prep
+      |            |
+      END          END
 ```
 
-## Graph Structure (Detailed)
+---
 
-```
-                    +-------+
-                    | START |
-                    +---+---+
-                        |
-                        v
-            +-----------+-----------+
-            |   understand_mood     |
-            |                       |
-            | Acknowledges feeling  |
-            | Severity: MILD /      |
-            |   MODERATE / HIGH     |
-            +-----------+-----------+
-                        |
-           PARALLEL FAN-OUT (3 edges from one node)
-          /             |              \
-         v              v               v
-+--------+---+ +-------+------+ +------+--------+
-|  suggest   | |   suggest    | |   suggest     |
-|  breathing | | mindfulness  | |   movement    |
-|            | |              | |               |
-| e.g. 4-7-8| | e.g. 5-4-3  | | e.g. child's  |
-| breathing  | | -2-1 ground | | pose, neck    |
-|            | |              | | rolls         |
-+--------+---+ +-------+------+ +------+--------+
-         \              |               /
-          FAN-IN (all 3 must finish)
-                        |
-                        v
-          +-------------+-------------+
-          |     pick_best_practice    |
-          |                           |
-          | Reads all 3 suggestions   |
-          | Returns JSON:             |
-          | {needs_deep_session,      |
-          |  reason}                  |
-          +-------------+-------------+
-                        |
-               CONDITIONAL EDGE
-              route_after_decision()
-                   /         \
-      false       /           \      true
-    (MILD/MOD)   /             \   (HIGH)
-                v               v
-    +-----------+--+   +-------+---------+
-    | quick_       |   | deep_           |
-    | practice     |   | practice        |
-    |              |   |                 |
-    | Under 5 min  |   | 10-15 min       |
-    | Best single  |   | 3 phases:       |
-    | technique,   |   |  1. Settle      |
-    | numbered     |   |  2. Ground      |
-    | steps        |   |  3. Release     |
-    +-----------+--+   +-------+---------+
-                \               /
-                 \             /
-                  v           v
-                  +----+----+
-                  |   END   |
-                  +---------+
+## 🧩 Core Components
+
+### 1. State Management
+
+The system uses a shared state object:
+
+```python
+class InterviewPrepState(BaseModel):
 ```
 
-## State Fields
+#### Fields:
+
+* `user_input` → raw user input
+* `technical_suggestion` → DSA/system design topics
+* `behavioral_suggestion` → STAR-based prompts
+* `confidence_suggestion` → mindset tips
+* `needs_deep_prep` → routing decision (bool)
+* `prep_reason` → explanation for decision
+* `final_plan` → final output
+* `messages` → execution trace/log
+
+👉 This state flows through all nodes.
+
+---
+
+### 2. LLM Layer
+
+All nodes use:
+
+```python
+ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
+```
+
+Each node has a **specialized prompt role**:
+
+* Interview coach
+* Technical interviewer
+* Behavioral coach
+* Confidence coach
+* Decision system
+
+---
+
+### 3. Nodes (Processing Units)
+
+#### 🔹 `understand_context`
+
+* Acknowledges user input
+* Extracts urgency level (LOW/MEDIUM/HIGH)
+
+---
+
+#### 🔹 `suggest_technical`
+
+* Suggests key technical topics
+* Focus: DSA, system design
+
+---
+
+#### 🔹 `suggest_behavioral`
+
+* Generates STAR-based story prompts
+* Focus: past achievements
+
+---
+
+#### 🔹 `suggest_confidence`
+
+* Provides confidence-building habits
+* Focus: mindset, breathing, posture
+
+---
+
+### ⚡ Parallel Execution (Fan-Out)
+
+These three nodes run **simultaneously**:
+
+* technical
+* behavioral
+* confidence
+
+---
+
+### 🔹 `pick_prep_strategy`
+
+* Aggregates all suggestions
+* Decides:
+
+  * Quick Prep (1 hour)
+  * Deep Prep (3 hours)
+* Returns JSON:
+
+```json
+{
+  "needs_deep_prep": true/false,
+  "reason": "..."
+}
+```
+
+---
+
+### 🔀 Conditional Routing
+
+```python
+route_after_decision()
+```
+
+* `True` → deep_prep
+* `False` → quick_prep
+
+---
+
+### 🔹 `quick_prep`
+
+* Generates **1-hour focused plan**
+* Covers top 3 gaps only
+
+---
+
+### 🔹 `deep_prep`
+
+* Generates **3-hour structured plan**
+* Includes:
+
+  * Technical block
+  * Behavioral block
+  * Confidence block
+
+---
+
+## 🔄 Execution Flow
+
+1. User provides input
+2. Context is understood
+3. 3 expert suggestions run in parallel
+4. Results are merged
+5. Decision node selects prep depth
+6. Final plan is generated
+
+---
+
+## 🧠 Key LangGraph Concepts Used
+
+| Concept            | Usage                            |
+| ------------------ | -------------------------------- |
+| State              | Shared data across nodes         |
+| Nodes              | Independent functions            |
+| Parallel Execution | Multiple suggestion engines      |
+| Fan-in             | Merge outputs into decision node |
+| Conditional Edges  | Route based on decision          |
+| Graph Compilation  | Convert to runnable app          |
+
+---
+
+## 🖥️ Runtime (CLI)
+
+The script runs in a loop:
 
 ```
-WellnessState
-|
-|-- user_feeling              <-- set by user input
-|-- breathing_suggestion      <-- written by suggest_breathing
-|-- mindfulness_suggestion    <-- written by suggest_mindfulness
-|-- movement_suggestion       <-- written by suggest_movement
-|-- needs_deep_session        <-- written by pick_best_practice
-|-- practice_reason           <-- written by pick_best_practice
-|-- final_suggestion          <-- written by quick_practice OR deep_practice
-|-- messages                  <-- appended by ALL nodes (operator.add)
+Your situation ? >
 ```
 
-## LangGraph Concepts Used
-
-| Concept | Where in Code | What It Does |
-|---------|--------------|--------------|
-| State (Pydantic) | `WellnessState` class | Typed data that flows through every node |
-| Nodes | `understand_mood`, `suggest_*`, etc. | Functions that read state, do one job, return updates |
-| Parallel Execution | 3 edges from `understand_mood` | LangGraph runs all 3 suggest nodes simultaneously |
-| Fan-In | 3 edges into `pick_best_practice` | Waits for all parallel nodes to finish |
-| Conditional Edge | `route_after_decision()` | Routes to quick or deep based on `needs_deep_session` |
-| Graph Compilation | `graph.compile()` | Turns graph definition into runnable `app` |
-| Invocation | `app.invoke({...})` | Runs the graph with initial state |
-| Message Accumulation | `Annotated[list, operator.add]` | Parallel nodes append without overwriting |
-
-## Tech Stack
-
-| Component | Purpose |
-|-----------|---------|
-| LangGraph | Graph orchestration -- nodes, edges, parallel, conditional |
-| LangChain | OpenAI LLM wrapper (ChatOpenAI) |
-| OpenAI | gpt-4o-mini -- cheap, fast, good enough for demo |
-| Pydantic | State validation and type safety |
-| python-dotenv | Load OPENAI_API_KEY from .env |
-
-## File Structure
+Example input:
 
 ```
-LangGraph_AgentFramework/
-|-- mental_wellness_graph.py    Main code (graph + interactive loop)
-|-- architecture.md             This file
-|-- architecture.drawio         Visual diagram (open with draw.io extension)
-|-- requirements.txt            4 dependencies
-|-- .env                        OPENAI_API_KEY (not committed)
-|-- .env.example                Template for .env
-|-- .gitignore                  Ignores .env, venv, __pycache__
+"I have a backend interview tomorrow and feel underprepared"
 ```
+
+Output:
+
+* Personalized prep plan
+* Execution log
+
+---
+
+## ⚠️ Known Improvements
+
+* Urgency extraction not explicitly stored in state
+* Minor naming inconsistency (`run_wellness_check`)
+* Could add:
+
+  * Resume-based personalization
+  * Company-specific prep
+  * Mock interview simulation
+
+---
+
+## 🚀 Future Enhancements
+
+* 🌐 Web UI (Streamlit)
+* 📊 Readiness scoring system
+* 🎯 Role-specific pipelines
+* 🧪 Unit testing for nodes
+
+---
+
+## 📦 Dependencies
+
+* langgraph
+* langchain-openai
+* python-dotenv
+* pydantic
+
+---
+
+## 🧾 Summary
+
+This project demonstrates a **modular, scalable AI workflow** using LangGraph, combining:
+
+* Parallel reasoning
+* Decision-making
+* Personalized output generation
+
+---
